@@ -155,7 +155,24 @@ class App:
 
 		return cdns, versions, blobs
 
-	def fetch_versions(self, versions, blobs, remote_cdn, metadata_only):
+	def get_keys_for_tags(self, build_config_key, cdn_config_key, tags):
+		build = BuildManager(build_config_key, cdn_config_key, self.keg.local_cdn)
+		entries = sorted(build.get_install().filter_entries(tags))
+		encoding_file = build.get_encoding()
+		archive_group = build.get_archive_group()
+
+		files = set()
+		for filename, key, size in entries:
+			encoding_key = encoding_file.find_by_content_key(key)
+
+			if archive_group.has_file(encoding_key):
+				encoding_key = archive_group.get_archive_by_key(encoding_key)
+
+			files.add(encoding_key)
+
+		return files
+
+	def fetch_versions(self, versions, blobs, remote_cdn, metadata_only, tags = None):
 		# Versions are often duplicated per region.
 		# In order not to do all the work several times, we dedupe first.
 		deduped_versions = {
@@ -227,6 +244,8 @@ class App:
 
 		if not metadata_only:
 			for fetcher, bar in fetchers:
+				if tags is not None:
+					keys = self.get_keys_for_tags(fetcher.version.build_config, fetcher.version.cdn_config, tags)
 				for queue in fetcher.fetch_data():
 					bar.bar_format = "{desc}{n_fmt}/{total_fmt}"
 					bar.n = 0
@@ -236,6 +255,9 @@ class App:
 					)
 
 					for item in queue.drain():
+						if tags is not None and item.key not in keys:
+							continue
+
 						item_bar.set_description_str(f"Downloading: {item.key}")
 						try:
 							item.fetch()
@@ -276,14 +298,15 @@ def init(ctx):
 @main.command()
 @click.argument("remote", type=RemoteParam())
 @click.option("--metadata-only", is_flag=True)
+@click.option("--tags", multiple=True)
 @click.pass_context
-def fetch(ctx, remote, metadata_only=True):
+def fetch(ctx, remote, metadata_only=True, tags=None):
 	click.echo(f"Fetching {remote}")
 	http_remote: CacheableHttpRemote = ctx.obj.keg.get_remote(remote)
 	cdns, versions, blobs = ctx.obj.fetch_stateful_data(http_remote)
 	remote_cdn = ctx.obj._choose_cdn(cdns)
 
-	ctx.obj.fetch_versions(versions, blobs, remote_cdn, metadata_only)
+	ctx.obj.fetch_versions(versions, blobs, remote_cdn, metadata_only, tags)
 
 
 @main.command("fetch-all")
@@ -298,8 +321,9 @@ def fetch_all(ctx, metadata_only=True):
 @click.argument("remote", type=RemoteParam())
 @click.argument("version-keys", nargs=-1, required=True)
 @click.option("--metadata-only", is_flag=True)
+@click.option("--tags", multiple=True)
 @click.pass_context
-def force_fetch(ctx, remote, version_keys, metadata_only):
+def force_fetch(ctx, remote, version_keys, metadata_only, tags=None):
 	http_remote: CacheableHttpRemote = ctx.obj.keg.get_remote(remote)
 	remote_cdn = ctx.obj._choose_cdn(http_remote.get_cached_cdns())
 
@@ -307,7 +331,7 @@ def force_fetch(ctx, remote, version_keys, metadata_only):
 		psvfile = ctx.obj.keg.state_cache.read_psv("/versions", version_key)
 		versions = [Versions(row) for row in psvfile]
 
-		ctx.obj.fetch_versions(versions, {}, remote_cdn, metadata_only)
+		ctx.obj.fetch_versions(versions, {}, remote_cdn, metadata_only, tags)
 
 
 @main.command("fetch-object")
@@ -556,7 +580,7 @@ def inspect(ctx, remote):
 @click.option("--only", multiple=True)
 @click.option("--root/--no-root", default=False)
 @click.pass_context
-def install(ctx, remote, version, outdir, tags, show_tags, dryrun, only, root):
+def install(ctx, remote, version, outdir, tags, show_tags, dry_run, only, root):
 	# version can be a BuildName, BuildID or BuildConfig
 	try:
 		build_config_key, cdn_config_key = ctx.obj.keg.db.find_version(
@@ -607,7 +631,7 @@ def install(ctx, remote, version, outdir, tags, show_tags, dryrun, only, root):
 			root_size,
 		))
 
-	if dryrun:
+	if dry_run:
 		table = ctx.obj.tabulate(
 			entries, headers=("Filename", "Digest", "Size")
 		)
@@ -626,7 +650,7 @@ def install(ctx, remote, version, outdir, tags, show_tags, dryrun, only, root):
 	if not encoding_file:
 		raise click.ClickException("No encoding file found. Cannot proceed.")
 
-	if dryrun:
+	if dry_run:
 		return
 
 	archive_group = build.get_archive_group()
