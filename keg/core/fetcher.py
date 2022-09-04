@@ -287,6 +287,11 @@ class Fetcher:
 			)
 
 		if self.build_config:
+			install_config_key = self.build_config.install.encoding_key
+			if install_config_key:
+				self.loose_file_queue.add(install_config_key)
+				yield Drain("install config", self.loose_file_queue, self)
+
 			patch_config_key = self.build_config.patch_config
 			if patch_config_key:
 				self.config_queue.add(patch_config_key)
