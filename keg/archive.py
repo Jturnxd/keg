@@ -151,3 +151,10 @@ class ArchiveGroup:
 			if item_key == key:
 				return self.get_file(key, size, archive_id, offset)
 		raise KeyError(key)
+
+	def get_archive_by_key(self, key: str) -> str:
+		for archive_key in self.archive_keys:
+			for item_key, size, offset in self.cdn.get_index(archive_key).items:
+				if key == item_key:
+					return archive_key
+		return None
